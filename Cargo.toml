@@ -1,0 +1,35 @@
+[package]
+name = "quanta-mobile-core"
+version = "0.1.0"
+edition = "2021"
+description = "Native Android JNI bindings for QuantaChain Post-Quantum Cryptography"
+
+[lib]
+name = "quanta_mobile_core"
+# cdylib produces the .so library required by Android JNI
+crate-type = ["cdylib"]
+
+[dependencies]
+# JNI bindings
+jni = "0.21.1"
+
+# Cryptography - strict pinning for consensus determinism
+falcon-rust = "0.1"
+sha3 = "0.10"
+hmac = "0.12"
+bip39 = "2.0.0"
+
+# Utilities
+hex = "0.4"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+getrandom = "0.2"
+zeroize = { version = "1.7", features = ["derive"] }
+
+[profile.release]
+# Optimize heavily for size and speed on mobile devices
+opt-level = 3
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true

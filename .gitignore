@@ -1,0 +1,5 @@
+target/
+Cargo.lock
+android-ndk-r25c/
+android-ndk-r25c-linux.zip
+**/*.rs.bk
