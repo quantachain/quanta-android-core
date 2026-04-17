@@ -1,11 +1,11 @@
 [package]
-name = "quanta-mobile-core"
+name = "quanta-android-core"
 version = "0.1.0"
 edition = "2021"
 description = "Native Android JNI bindings for QuantaChain Post-Quantum Cryptography"
 
 [lib]
-name = "quanta_mobile_core"
+name = "quanta_android_core"
 # cdylib produces the .so library required by Android JNI
 crate-type = ["cdylib"]
 
