@@ -267,3 +267,74 @@ pub extern "system" fn Java_com_quanta_mobile_crypto_NativeCrypto_verifySignatur
         JNI_FALSE
     }
 }
+
+/// Sign an arbitrary message with a Falcon-512 secret key.
+#[no_mangle]
+pub extern "system" fn Java_com_quanta_mobile_crypto_NativeCrypto_signMessage<'local>(
+    mut env: JNIEnv<'local>,
+    _class: JClass<'local>,
+    message_jstring: JString<'local>,
+    secret_key_jstring: JString<'local>,
+) -> jstring {
+    let message: String = match env.get_string(&message_jstring) {
+        Ok(s) => s.into(),
+        Err(_) => return env.new_string("").unwrap().into_raw(),
+    };
+    let secret_key_hex: String = match env.get_string(&secret_key_jstring) {
+        Ok(s) => s.into(),
+        Err(_) => return env.new_string("").unwrap().into_raw(),
+    };
+
+    let msg_bytes = message.as_bytes();
+    let mut sk_bytes = match hex::decode(&secret_key_hex) {
+        Ok(b) => b,
+        Err(_) => return env.new_string("").unwrap().into_raw(),
+    };
+
+    let sk = match SecretKey::from_bytes(&sk_bytes) {
+        Ok(k) => k,
+        Err(_) => {
+            sk_bytes.zeroize();
+            return env.new_string("").unwrap().into_raw();
+        }
+    };
+    sk_bytes.zeroize();
+
+    // Standard message hashing without transaction domain prefix
+    let hash = sha3_256(msg_bytes);
+    let sig: Signature = falcon_sign(&hash, &sk);
+    
+    let result_hex = hex::encode(sig.to_bytes());
+    env.new_string(result_hex).expect("Couldn't create java string!").into_raw()
+}
+
+/// Derive a public key from a Falcon-512 secret key.
+#[no_mangle]
+pub extern "system" fn Java_com_quanta_mobile_crypto_NativeCrypto_derivePubkeyFromSk<'local>(
+    mut env: JNIEnv<'local>,
+    _class: JClass<'local>,
+    secret_key_jstring: JString<'local>,
+) -> jstring {
+    let secret_key_hex: String = match env.get_string(&secret_key_jstring) {
+        Ok(s) => s.into(),
+        Err(_) => return env.new_string("").unwrap().into_raw(),
+    };
+
+    let mut sk_bytes = match hex::decode(&secret_key_hex) {
+        Ok(b) => b,
+        Err(_) => return env.new_string("").unwrap().into_raw(),
+    };
+
+    let sk = match SecretKey::from_bytes(&sk_bytes) {
+        Ok(k) => k,
+        Err(_) => {
+            sk_bytes.zeroize();
+            return env.new_string("").unwrap().into_raw();
+        }
+    };
+    sk_bytes.zeroize();
+
+    let pk = falcon_rust::falcon512::PublicKey::from_secret_key(&sk);
+    let result_hex = hex::encode(pk.to_bytes());
+    env.new_string(result_hex).expect("Couldn't create java string!").into_raw()
+}
