@@ -15,6 +15,7 @@ use falcon_rust::falcon512::{
 type HmacSha256 = Hmac<Sha3_256>;
 
 const SIGNING_DOMAIN: &[u8] = b"QUANTA_TX_V1:";
+const MSG_SIGNING_DOMAIN: &[u8] = b"QUANTA_MSG_V1:";
 
 // ---------------------------------------------------------------------------
 // JS-visible data structures (returned as JSON strings to Android Kotlin)
@@ -300,12 +301,84 @@ pub extern "system" fn Java_com_quanta_mobile_crypto_NativeCrypto_signMessage<'l
     };
     sk_bytes.zeroize();
 
-    // Standard message hashing without transaction domain prefix
-    let hash = sha3_256(msg_bytes);
+    // Hash: SHA3-256(QUANTA_MSG_V1: || message_bytes)
+    let mut hasher = Sha3_256::new();
+    hasher.update(MSG_SIGNING_DOMAIN);
+    hasher.update(msg_bytes);
+    let hash: [u8; 32] = hasher.finalize().into();
+
     let sig: Signature = falcon_sign(&hash, &sk);
-    
-    let result_hex = hex::encode(sig.to_bytes());
+    let sig_bytes = sig.to_bytes();
+
+    let mut out = Vec::with_capacity(sig_bytes.len() + 32);
+    out.extend_from_slice(&sig_bytes);
+    out.extend_from_slice(&hash);
+
+    let result_hex = hex::encode(out);
     env.new_string(result_hex).expect("Couldn't create java string!").into_raw()
+}
+
+/// Verify a Falcon-512 message signature produced by `signMessage()`.
+#[no_mangle]
+pub extern "system" fn Java_com_quanta_mobile_crypto_NativeCrypto_verifyMessage<'local>(
+    mut env: JNIEnv<'local>,
+    _class: JClass<'local>,
+    message_jstring: JString<'local>,
+    signed_msg_jstring: JString<'local>,
+    pubkey_jstring: JString<'local>,
+) -> jboolean {
+    let message: String = match env.get_string(&message_jstring) {
+        Ok(s) => s.into(),
+        Err(_) => return JNI_FALSE,
+    };
+    let signed_msg_hex: String = match env.get_string(&signed_msg_jstring) {
+        Ok(s) => s.into(),
+        Err(_) => return JNI_FALSE,
+    };
+    let pubkey_hex: String = match env.get_string(&pubkey_jstring) {
+        Ok(s) => s.into(),
+        Err(_) => return JNI_FALSE,
+    };
+
+    let msg_bytes = message.as_bytes();
+    let signed_bytes = match hex::decode(&signed_msg_hex) {
+        Ok(b) => b,
+        Err(_) => return JNI_FALSE,
+    };
+    let pk_bytes = match hex::decode(&pubkey_hex) {
+        Ok(b) => b,
+        Err(_) => return JNI_FALSE,
+    };
+
+    if signed_bytes.len() <= 32 {
+        return JNI_FALSE;
+    }
+    let sig_part = &signed_bytes[..signed_bytes.len() - 32];
+    let hash_part = &signed_bytes[signed_bytes.len() - 32..];
+
+    let mut hasher = Sha3_256::new();
+    hasher.update(MSG_SIGNING_DOMAIN);
+    hasher.update(msg_bytes);
+    let expected: [u8; 32] = hasher.finalize().into();
+
+    if hash_part != expected {
+        return JNI_FALSE;
+    }
+
+    let pk = match PublicKey::from_bytes(&pk_bytes) {
+        Ok(p) => p,
+        Err(_) => return JNI_FALSE,
+    };
+    let sig = match Signature::from_bytes(sig_part) {
+        Ok(s) => s,
+        Err(_) => return JNI_FALSE,
+    };
+
+    if falcon_verify(&expected, &sig, &pk) {
+        JNI_TRUE
+    } else {
+        JNI_FALSE
+    }
 }
 
 /// Derive a public key from a Falcon-512 secret key.
@@ -320,21 +393,16 @@ pub extern "system" fn Java_com_quanta_mobile_crypto_NativeCrypto_derivePubkeyFr
         Err(_) => return env.new_string("").unwrap().into_raw(),
     };
 
-    let mut sk_bytes = match hex::decode(&secret_key_hex) {
-        Ok(b) => b,
-        Err(_) => return env.new_string("").unwrap().into_raw(),
-    };
-
-    let sk = match SecretKey::from_bytes(&sk_bytes) {
-        Ok(k) => k,
-        Err(_) => {
-            sk_bytes.zeroize();
-            return env.new_string("").unwrap().into_raw();
+    // Check for combined sk|pk export format
+    if let Some(pipe_pos) = secret_key_hex.find('|') {
+        let pk_hex = &secret_key_hex[pipe_pos + 1..];
+        if let Ok(pk_bytes) = hex::decode(pk_hex) {
+            if PublicKey::from_bytes(&pk_bytes).is_ok() {
+                return env.new_string(pk_hex).expect("Couldn't create java string!").into_raw();
+            }
         }
-    };
-    sk_bytes.zeroize();
+    }
 
-    let pk = falcon_rust::falcon512::PublicKey::from_secret_key(&sk);
-    let result_hex = hex::encode(pk.to_bytes());
-    env.new_string(result_hex).expect("Couldn't create java string!").into_raw()
+    // falcon-rust 0.1 cannot derive PK from standalone SK, must use combined format
+    env.new_string("").unwrap().into_raw()
 }
